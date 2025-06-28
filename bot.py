@@ -1,14 +1,17 @@
 import os
 import telebot
 import requests
+from flask import Flask, request
 
 # Load environment variables
 BOT_A_TOKEN = os.getenv("BOT_A_TOKEN")
 BOT_B_TOKEN = os.getenv("BOT_B_TOKEN")
 ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # e.g. https://your-render-app.onrender.com
 
-# Initialize bot A
+# Initialize bot and Flask
 bot_a = telebot.TeleBot(BOT_A_TOKEN)
+app = Flask(__name__)
 
 # /start handler
 @bot_a.message_handler(commands=['start'])
@@ -41,5 +44,25 @@ def notify_admin_and_user(user_id, name, message_text=""):
         params={'chat_id': ADMIN_CHAT_ID, 'text': msg}
     )
 
-print("Bot is running...")
-bot_a.polling()
+# Webhook route
+@app.route(f"/{BOT_A_TOKEN}", methods=["POST"])
+def webhook():
+    json_str = request.get_data().decode("utf-8")
+    update = telebot.types.Update.de_json(json_str)
+    bot_a.process_new_updates([update])
+    return "OK", 200
+
+# Simple route for UptimeRobot ping
+@app.route("/", methods=["GET"])
+def home():
+    return "Bot is alive!", 200
+
+# Set webhook on startup
+@app.before_first_request
+def set_webhook():
+    bot_a.remove_webhook()
+    bot_a.set_webhook(url=f"{WEBHOOK_URL}/{BOT_A_TOKEN}")
+
+# Run Flask
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
