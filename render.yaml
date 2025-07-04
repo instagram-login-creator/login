@@ -2,7 +2,7 @@ services:
   - type: web
     name: telegram-bot
     env: python
-    buildCommand: ""
+    buildCommand: "pip install -r requirements.txt"
     startCommand: "python bot.py"
     plan: free
     envVars:
@@ -12,3 +12,5 @@ services:
         value: your_bot_b_token_here
       - key: ADMIN_CHAT_ID
         value: your_admin_chat_id_here
+      - key: WEBHOOK_URL
+        value: https://chat-id-bot-fizm.onrender.com
