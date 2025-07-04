@@ -9,28 +9,20 @@ from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 BOT_A_TOKEN = os.getenv("BOT_A_TOKEN")
 BOT_B_TOKEN = os.getenv("BOT_B_TOKEN")
 ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # e.g., https://your-app-name.onrender.com
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 
-# Initialize Flask and Bot
+# Initialize Flask and Telegram bot
 app = Flask(__name__)
 bot = telebot.TeleBot(BOT_A_TOKEN)
-user_states = {}  # Track user flow
+user_states = {}  # For tracking user actions
 
-# --- UI Helpers ---
+# -- Helpers --
+
 def main_menu():
     markup = InlineKeyboardMarkup()
     markup.row(
         InlineKeyboardButton("📬 Chat ID", callback_data="chat_id"),
         InlineKeyboardButton("📺 YouTube", callback_data="youtube")
-    )
-    return markup
-
-def resolution_menu():
-    markup = InlineKeyboardMarkup()
-    markup.row(
-        InlineKeyboardButton("360p", callback_data="res_360"),
-        InlineKeyboardButton("480p", callback_data="res_480"),
-        InlineKeyboardButton("720p", callback_data="res_720")
     )
     return markup
 
@@ -48,82 +40,68 @@ def notify_admin(user_id, name, msg=""):
         params={'chat_id': ADMIN_CHAT_ID, 'text': full_msg}
     )
 
-# --- Handlers ---
+# -- Handlers --
+
 @bot.message_handler(commands=['start'])
 def handle_start(message):
-    user_id = message.chat.id
+    chat_id = message.chat.id
     name = message.from_user.first_name
-    user_states.pop(user_id, None)
-    send_intro(user_id, name)
-    notify_admin(user_id, name, "/start")
+    user_states.pop(chat_id, None)
+    send_intro(chat_id, name)
+    notify_admin(chat_id, name, "/start")
 
 @bot.message_handler(func=lambda m: True)
 def handle_text(message):
-    user_id = message.chat.id
+    chat_id = message.chat.id
     name = message.from_user.first_name
-    if user_states.get(user_id) == "awaiting_link":
-        user_states[user_id] = {"state": "awaiting_resolution", "link": message.text}
-        bot.send_message(user_id, "🎞️ Choose a resolution:", reply_markup=resolution_menu())
+    state = user_states.get(chat_id)
+
+    if state == "awaiting_link":
+        url = message.text.strip()
+        bot.send_message(chat_id, "⏬ Downloading your video...")
+        download_and_send_video(chat_id, url)
+        user_states.pop(chat_id, None)
+        send_intro(chat_id, name)
     else:
-        send_intro(user_id, name)
-        notify_admin(user_id, name, message.text)
+        send_intro(chat_id, name)
+        notify_admin(chat_id, name, message.text)
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callback(call):
-    user_id = call.message.chat.id
+    chat_id = call.message.chat.id
     name = call.from_user.first_name
 
     if call.data == "chat_id":
-        bot.send_message(user_id, f"Your Chat ID is: `{user_id}`", parse_mode="Markdown")
-        send_intro(user_id, name)
+        bot.send_message(chat_id, f"Your Chat ID is: `{chat_id}`", parse_mode="Markdown")
+        send_intro(chat_id, name)
 
     elif call.data == "youtube":
-        user_states[user_id] = "awaiting_link"
-        bot.send_message(user_id, "📥 Send the YouTube link to download:")
+        user_states[chat_id] = "awaiting_link"
+        bot.send_message(chat_id, "📥 Please send the YouTube video link.")
 
-    elif call.data.startswith("res_"):
-        res = call.data.split("_")[1]
-        link_info = user_states.get(user_id)
-        if not isinstance(link_info, dict) or "link" not in link_info:
-            bot.send_message(user_id, "❌ No link found. Please try again.")
-            send_intro(user_id, name)
-            return
+# -- YouTube Downloader --
 
-        url = link_info["link"]
-        bot.send_message(user_id, f"⏬ Downloading video at {res}p... Please wait.")
-        download_and_send_video(user_id, url, res)
-        user_states.pop(user_id, None)
-        send_intro(user_id, name)
-
-# --- Downloading ---
-def download_and_send_video(chat_id, url, resolution):
-    format_map = {
-        "360": "bestvideo[height<=360]+bestaudio/best[height<=360]",
-        "480": "bestvideo[height<=480]+bestaudio/best[height<=480]",
-        "720": "bestvideo[height<=720]+bestaudio/best[height<=720]"
-    }
-
-    ydl_opts = {
-        'format': format_map.get(resolution, 'best'),
-        'merge_output_format': 'mp4',
-        'outtmpl': '/tmp/%(title)s.%(ext)s',
-        'ffmpeg_location': "ffmpeg",
-        'prefer_ffmpeg': True,
-        'quiet': True
-    }
-
+def download_and_send_video(chat_id, url):
     try:
+        ydl_opts = {
+            'format': 'best',
+            'outtmpl': '/tmp/%(title)s.%(ext)s',
+            'ffmpeg_location': "ffmpeg",
+            'quiet': True
+        }
+
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
             file_path = ydl.prepare_filename(info)
 
-        with open(file_path, 'rb') as f:
-            bot.send_video(chat_id, f)
+        with open(file_path, 'rb') as video:
+            bot.send_video(chat_id, video)
 
     except Exception as e:
-        bot.send_message(chat_id, f"❌ Failed to download video.\nError: {e}")
+        bot.send_message(chat_id, f"❌ Failed to download video.\nError: {str(e)}")
 
-# --- Webhook ---
+# -- Flask Webhook Endpoints --
+
 @app.route(f"/{BOT_A_TOKEN}", methods=["POST"])
 def webhook():
     update = telebot.types.Update.de_json(request.get_data().decode("utf-8"))
@@ -133,6 +111,8 @@ def webhook():
 @app.route("/", methods=["GET"])
 def home():
     return "Bot is alive!", 200
+
+# -- Start the App --
 
 if __name__ == "__main__":
     bot.remove_webhook()
